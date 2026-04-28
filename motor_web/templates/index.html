@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Motor Control & PID Tuning Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; color: #333; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        .dashboard { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 8px 20px rgba(0,0,0,0.1); width: 100%; max-width: 800px; text-align: center; margin-bottom: 20px; }
+        h1 { color: #2c3e50; margin-bottom: 20px; }
+        .stats-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin-bottom: 20px; }
+        .stat-box { background: #ecf0f1; padding: 15px; border-radius: 8px; }
+        .stat-value { font-size: 24px; font-weight: bold; color: #2980b9; margin-top: 5px;}
+        .control-group { margin-bottom: 20px; text-align: left;}
+        label { font-weight: bold; display: block; margin-bottom: 10px; color: #34495e;}
+        input[type=range] { width: 100%; cursor: pointer; }
+        .btn-group { display: flex; gap: 10px; justify-content: center; }
+        button { flex: 1; padding: 12px; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; font-weight: bold; transition: 0.2s;}
+        .btn-fwd { background: #27ae60; color: white; }
+        .btn-stop { background: #e74c3c; color: white; }
+        .btn-rev { background: #f39c12; color: white; }
+        button:hover { opacity: 0.8; }
+        
+        /* The Chart Container */
+        .chart-container { position: relative; height: 300px; width: 100%; margin-top: 20px; border-top: 2px solid #ecf0f1; padding-top: 20px; }
+    </style>
+</head>
+<body>
+
+<div class="dashboard">
+    <h1>System Dashboard & Live Plotter</h1>
+    
+    <div class="stats-grid">
+        <div class="stat-box">
+            <div>Total Pulses</div>
+            <div class="stat-value" id="pulse-display">0</div>
+        </div>
+        <div class="stat-box">
+            <div>Relative Speed</div>
+            <div class="stat-value"><span id="speed-calc-display">0</span></div>
+        </div>
+        <div class="stat-box">
+            <div>PWM Duty Cycle</div>
+            <div class="stat-value"><span id="pwm-display">0</span>%</div>
+        </div>
+    </div>
+
+    <div class="control-group">
+        <label>Motor Throttle (PWM): <span id="speed-label">0</span>%</label>
+        <input type="range" id="speed-slider" min="0" max="100" value="0" onchange="sendControl()">
+    </div>
+
+    <div class="control-group btn-group">
+        <button class="btn-rev" onclick="setDirection('reverse')">Reverse</button>
+        <button class="btn-stop" onclick="setDirection('stop')">STOP</button>
+        <button class="btn-fwd" onclick="setDirection('forward')">Forward</button>
+    </div>
+
+    <div class="chart-container">
+        <canvas id="liveChart"></canvas>
+    </div>
+</div>
+
+<script>
+    // --- 1. UI Control Logic ---
+    let currentDir = 'stop';
+
+    function updateSliderLabel() {
+        document.getElementById('speed-label').innerText = document.getElementById('speed-slider').value;
+    }
+    document.getElementById('speed-slider').addEventListener('input', updateSliderLabel);
+
+    function setDirection(dir) {
+        currentDir = dir;
+        sendControl();
+    }
+
+    function sendControl() {
+        const speed = document.getElementById('speed-slider').value;
+        fetch('/api/control', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ direction: currentDir, speed: speed })
+        });
+    }
+
+    // --- 2. Live Chart Setup ---
+    const ctx = document.getElementById('liveChart').getContext('2d');
+    const liveChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [], // Time goes here
+            datasets: [
+                {
+                    label: 'Motor Speed (Relative)',
+                    borderColor: '#e74c3c', // Red line
+                    backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                    borderWidth: 2,
+                    pointRadius: 0, // Hides the dots to look more like an oscilloscope
+                    data: [],
+                    tension: 0.4 // Smooths the curves
+                },
+                {
+                    label: 'Control PWM (%)',
+                    borderColor: '#3498db', // Blue line
+                    borderWidth: 2,
+                    borderDash: [5, 5], // Dashed line so you can tell them apart
+                    pointRadius: 0,
+                    data: [],
+                    stepped: true // PWM changes in steps, not curves
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false, // Turn off animation for faster rendering
+            scales: {
+                x: { display: false }, // Hide the messy time labels on the bottom
+                y: { min: 0, suggestedMax: 100 }
+            }
+        }
+    });
+
+    // --- 3. Data Fetching & Chart Updating ---
+    let lastPulseCount = 0;
+    let timeTick = 0;
+
+    // Fetch data every 200 milliseconds (5 times a second)
+    setInterval(() => {
+        fetch('/api/status')
+            .then(res => res.json())
+            .then(data => {
+                // Update text boxes
+                document.getElementById('pulse-display').innerText = data.pulses;
+                document.getElementById('pwm-display').innerText = data.speed;
+                
+                // Calculate Relative Speed (how many pulses happened since the last check)
+                let relativeSpeed = Math.abs(data.pulses - lastPulseCount);
+                document.getElementById('speed-calc-display').innerText = relativeSpeed;
+                lastPulseCount = data.pulses; // Save for the next loop
+
+                // Update the Chart
+                timeTick++;
+                liveChart.data.labels.push(timeTick);
+                liveChart.data.datasets[0].data.push(relativeSpeed); // The red speed line
+                liveChart.data.datasets[1].data.push(data.speed);    // The blue PWM line
+
+                // Keep the chart from getting too crowded (remove old data after 50 ticks)
+                if (liveChart.data.labels.length > 50) {
+                    liveChart.data.labels.shift();
+                    liveChart.data.datasets[0].data.shift();
+                    liveChart.data.datasets[1].data.shift();
+                }
+
+                liveChart.update();
+            });
+    }, 200); // 200ms refresh rate
+</script>
+
+</body>
+</html>
