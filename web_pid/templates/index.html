@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced PID SCADA Terminal</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background-color: #0d1117; 
+            color: #c9d1d9; 
+            padding: 20px; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+        }
+        .dashboard { 
+            background: #161b22; 
+            padding: 25px; 
+            border-radius: 12px; 
+            width: 100%; 
+            max-width: 950px; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8); 
+            border: 1px solid #30363d;
+        }
+        h2 { 
+            text-align: center; 
+            color: #58a6ff; 
+            margin-top: 0; 
+            text-transform: uppercase; 
+            letter-spacing: 2px;
+        }
+        .chart-container { 
+            position: relative; 
+            height: 350px; 
+            width: 100%; 
+            margin-bottom: 15px; 
+            background: #010409; 
+            border-radius: 8px; 
+            padding: 10px; 
+            border: 1px solid #30363d;
+        }
+        
+        /* Live Metrics HUD */
+        .metrics-hud { 
+            display: flex; 
+            justify-content: space-around; 
+            background: #21262d; 
+            padding: 15px; 
+            border-radius: 8px; 
+            margin-bottom: 20px; 
+            border: 1px solid #30363d;
+        }
+        .metric-box { text-align: center; }
+        .metric-label { font-size: 12px; color: #8b949e; text-transform: uppercase; font-weight: bold;}
+        .metric-value { font-size: 24px; color: #58a6ff; font-family: monospace; font-weight: bold;}
+        
+        /* Controls */
+        .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .control-group { 
+            background: #21262d; 
+            padding: 15px; 
+            border-radius: 8px; 
+            display: flex; 
+            align-items: center; 
+            justify-content: space-between; 
+            border: 1px solid #30363d;
+        }
+        label { font-weight: bold; width: 120px; color: #8b949e;}
+        input[type=range] { flex-grow: 1; margin: 0 15px; cursor: pointer; accent-color: #58a6ff;}
+        .val-display { 
+            background: #0d1117; 
+            padding: 5px 10px; 
+            border-radius: 4px; 
+            font-family: monospace; 
+            width: 45px; 
+            text-align: center; 
+            border: 1px solid #58a6ff; 
+            color: #58a6ff;
+        }
+        
+        /* Buttons */
+        .btn-group { grid-column: span 2; display: flex; gap: 10px; margin-top: 10px; }
+        button { 
+            flex: 1; 
+            padding: 15px; 
+            border: none; 
+            border-radius: 8px; 
+            font-size: 16px; 
+            font-weight: bold; 
+            cursor: pointer; 
+            transition: 0.2s; 
+            text-transform: uppercase; 
+            letter-spacing: 1px;
+        }
+        .btn-start { background: #238636; color: white; border: 1px solid rgba(240, 253, 244, 0.1); }
+        .btn-stop { background: #da3633; color: white; border: 1px solid rgba(254, 226, 226, 0.1); }
+        button:hover { filter: brightness(1.2); }
+    </style>
+</head>
+<body>
+
+<div class="dashboard">
+    <h2>Industrial SCADA | PID Tuning</h2>
+    
+    <div class="chart-container">
+        <canvas id="pidChart"></canvas>
+    </div>
+
+    <!-- LIVE METRICS HUD -->
+    <div class="metrics-hud">
+        <div class="metric-box">
+            <div class="metric-label">PWM Output</div>
+            <div class="metric-value" id="hud-pwm">0.0%</div>
+        </div>
+        <div class="metric-box">
+            <div class="metric-label">Max Overshoot</div>
+            <div class="metric-value" id="hud-overshoot">0.0%</div>
+        </div>
+        <div class="metric-box">
+            <div class="metric-label">Steady-State Error</div>
+            <div class="metric-value" id="hud-sse">0.0%</div>
+        </div>
+        <div class="metric-box">
+            <div class="metric-label">Settling Time (2%)</div>
+            <div class="metric-value" id="hud-settling">0.00s</div>
+        </div>
+    </div>
+
+    <div class="controls">
+        <div class="control-group">
+            <label>Target RPM</label>
+            <input type="range" id="target" min="0" max="60" value="0" step="1" oninput="updateVal('target')">
+            <div class="val-display" id="target-val">0</div>
+        </div>
+        <div class="control-group">
+            <label>Proportional (Kp)</label>
+            <input type="range" id="kp" min="0" max="5.0" value="1.5" step="0.1" oninput="updateVal('kp')">
+            <div class="val-display" id="kp-val">1.5</div>
+        </div>
+        <div class="control-group">
+            <label>Integral (Ki)</label>
+            <input type="range" id="ki" min="0" max="3.0" value="1.5" step="0.1" oninput="updateVal('ki')">
+            <div class="val-display" id="ki-val">1.5</div>
+        </div>
+        <div class="control-group">
+            <label>Derivative (Kd)</label>
+            <input type="range" id="kd" min="0" max="0.5" value="0.0" step="0.01" oninput="updateVal('kd')">
+            <div class="val-display" id="kd-val">0.0</div>
+        </div>
+        
+        <div class="btn-group">
+            <button class="btn-start" onclick="toggleMotor(true)">START SYSTEM</button>
+            <button class="btn-stop" onclick="toggleMotor(false)">EMERGENCY STOP</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- UI Control Logic ---
+    function updateVal(id) {
+        let val = document.getElementById(id).value;
+        document.getElementById(id + '-val').innerText = val;
+        sendUpdate();
+    }
+
+    let isRunning = false;
+    function toggleMotor(state) {
+        isRunning = state;
+        if (!state) document.getElementById('target').value = 0; 
+        updateVal('target'); 
+    }
+
+    function sendUpdate() {
+        fetch('/api/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                target_rpm: document.getElementById('target').value,
+                Kp: document.getElementById('kp').value,
+                Ki: document.getElementById('ki').value,
+                Kd: document.getElementById('kd').value,
+                running: isRunning
+            })
+        });
+    }
+
+    // --- Advanced Chart.js Setup (Dual Lines) ---
+    const ctx = document.getElementById('pidChart').getContext('2d');
+    const pidChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [], 
+            datasets: [
+                { label: 'Target Setpoint', borderColor: '#ffffff', borderDash: [5, 5], borderWidth: 2, pointRadius: 0, data: [], zIndex: 3 },
+                { label: 'Smoothed Curve', borderColor: '#58a6ff', backgroundColor: 'rgba(88, 166, 255, 0.1)', borderWidth: 3, pointRadius: 0, fill: true, data: [], zIndex: 2 },
+                { label: 'Raw Sensor Data', borderColor: '#8b949e', borderWidth: 1, pointRadius: 0, data: [], zIndex: 1, opacity: 0.3 }
+            ]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false, animation: false,
+            scales: {
+                x: { display: false }, 
+                y: { min: 0, max: 70, grid: { color: '#30363d' }, ticks: { color: '#8b949e' } }
+            },
+            plugins: { legend: { labels: { color: '#c9d1d9' } } }
+        }
+    });
+
+    // --- Real-Time Data Fetching Loop ---
+    let timeTick = 0;
+    setInterval(() => {
+        fetch('/api/data')
+            .then(res => res.json())
+            .then(data => {
+                timeTick++;
+                
+                // Update Graph Lines
+                pidChart.data.labels.push(timeTick);
+                pidChart.data.datasets[0].data.push(data.target_rpm);
+                pidChart.data.datasets[1].data.push(data.smoothed_rpm); 
+                pidChart.data.datasets[2].data.push(data.actual_rpm);   
+
+                // Keep graph scrolling gracefully
+                if (pidChart.data.labels.length > 100) {
+                    pidChart.data.labels.shift();
+                    pidChart.data.datasets[0].data.shift();
+                    pidChart.data.datasets[1].data.shift();
+                    pidChart.data.datasets[2].data.shift();
+                }
+                pidChart.update();
+
+                // Update Live Metrics HUD
+                document.getElementById('hud-pwm').innerText = data.pwm.toFixed(1) + '%';
+                document.getElementById('hud-overshoot').innerText = data.overshoot.toFixed(1) + '%';
+                document.getElementById('hud-sse').innerText = data.sse.toFixed(1) + '%';
+                document.getElementById('hud-settling').innerText = data.settling_time.toFixed(2) + 's';
+            })
+            .catch(err => console.error("Waiting for backend...", err));
+    }, 100);
+</script>
+
+</body>
+</html>

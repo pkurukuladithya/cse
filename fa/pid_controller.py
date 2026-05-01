@@ -16,9 +16,9 @@ MAX_SAFE_RPM = 100       # RUBRIC: Safety cut-off limit (based on your 50 RPM ma
 MAX_PWM = 100.0          # Max throttle
 
 # --- PID GAINS (Placeholders for Module 2) ---
-Kp = 1.5
-Ki = 1.5
-Kd = 0.02
+Kp = 0.5
+Ki = 1.7
+Kd = 0.01
 
 # --- SYSTEM STATE VARIABLES ---
 pulse_count = 0
@@ -65,7 +65,7 @@ try:
     target_rpm = float(input("Enter Target Speed (RPM) [e.g., 25, 40]: "))
     test_duration = float(input("Enter Test Duration (seconds) [e.g., 5]: "))
     
-    filename = f"pid_test_{int(target_rpm)}rpm.csv"
+    filename = f"pid_test6_{int(target_rpm)}rpm.csv"
     print(f"\nStarting PID loop targeting {target_rpm} RPM for {test_duration}s...")
     time.sleep(2)
 

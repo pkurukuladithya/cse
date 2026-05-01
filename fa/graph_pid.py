@@ -4,7 +4,7 @@ import numpy as np
 import sys
 
 # Change this filename to whichever test you want to graph!
-filename = "pid_test_30rpm.csv" 
+filename = "pid_test6_30rpm.csv" 
 
 try:
     data = pd.read_csv(filename)
@@ -50,8 +50,15 @@ fig, ax = plt.subplots(figsize=(10, 6))
 ax.fill_between(time, target_val - tolerance, target_val + tolerance, 
                 color='gray', alpha=0.2, label='+/- 2% Settling Band')
 
-# Plot Actual Speed
-ax.plot(time, actual, 'b-', label='Motor Speed (RPM)', linewidth=1.5)
+# The "Ultimate Smooth" 10-Point Centered Filter
+# center=True ensures the smooth line doesn't lag behind the raw data
+actual_smoothed = pd.Series(actual).rolling(window=10, min_periods=1, center=True).mean()
+
+# Plot the beautiful, perfectly smooth line
+ax.plot(time, actual_smoothed, 'b-', label='Smoothed Motor Speed', linewidth=2.5)
+
+# Plot the raw, spikey data faintly in the background 
+ax.plot(time, actual, 'b-', alpha=0.15, label='Raw Sensor Data')
 
 # Plot Target Line
 ax.axhline(target_val, color='r', linestyle='--', label='Target (Setpoint)')
@@ -82,6 +89,6 @@ ax.text(0.95, 0.05, metrics_text, transform=ax.transAxes, fontsize=10,
         verticalalignment='bottom', horizontalalignment='right', bbox=props)
 
 # Save the image
-output_name = filename.replace('.csv', '_Graph_best.png')
+output_name = filename.replace('.csv', '_6.png')
 plt.savefig(output_name, dpi=300, bbox_inches='tight')
 print(f"✅ Saved {output_name} successfully!")
