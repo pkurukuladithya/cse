@@ -16,9 +16,9 @@ MAX_SAFE_RPM = 100
 MAX_PWM = 100.0
 
 # --- FINAL OPTIMAL PID GAINS ---
-Kp = 1.5
-Ki = 1.5
-Kd = 0.0
+Kp = 0.5
+Ki = 1.7
+Kd = 0.01
 MAX_INTEGRAL = 200.0
 
 print("Connecting to hardware...")
