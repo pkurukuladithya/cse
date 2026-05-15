@@ -1,7 +1,12 @@
 """
 main.py
 FastAPI application — WebSocket server + REST API + static file serving.
-Run with:  uvicorn main:app --host 0.0.0.0 --port 8000
+
+Run on Pi:
+  uvicorn main:app --host 0.0.0.0 --port 5000 --workers 1
+
+Dev (laptop):
+  uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 """
 import asyncio
 import time
@@ -11,51 +16,83 @@ from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
 
 import logger
-from motor_driver import get_motor_driver
+from motor_driver import get_motor_driver, HARDWARE_AVAILABLE
 from pid_controller import PIDController
 from auto_tuner import AutoTuner
+from models import (
+    PIDParamsMsg, AutoTuneRequest, RecipeCreate,
+    StatusResponse,
+)
+from config import (
+    DEFAULT_KP, DEFAULT_KI, DEFAULT_KD, DEFAULT_SP,
+    WS_TELEMETRY_INTERVAL,
+)
 
-# ─────────────────────────────────────────────
-# Initialise DB, hardware, controller
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
+# Initialise
+# ─────────────────────────────────────────────────────────
 logger.init_db()
 motor = get_motor_driver()
 
-# Shared state — single source of truth for everything
+_start_time = time.time()
+
+# Shared state — single source of truth
 state: dict = {
-    "target_rpm":   0.0,
-    "actual_rpm":   0.0,
-    "smoothed_rpm": 0.0,
-    "pwm":          0.0,
-    "overshoot":    0.0,
-    "sse":          0.0,
-    "settling_time": 0.0,
-    "Kp":           1.5,
-    "Ki":           1.5,
-    "Kd":           0.0,
-    "running":      False,
-    "alarm":        None,
+    # Control
+    "running":       False,
+    "setpoint":      DEFAULT_SP,
+    "kp":            DEFAULT_KP,
+    "ki":            DEFAULT_KI,
+    "kd":            DEFAULT_KD,
+    "run_source":    "manual",
+
+    # Telemetry
+    "actual_rpm":    0.0,
+    "smoothed_rpm":  0.0,
+    "pwm":           0.0,
+    "error":         0.0,
+    "phase":         "idle",
+
+    # KPIs
+    "rise_time":     None,
+    "overshoot":     0.0,
+    "settle_time":   None,
+    "itae":          0.0,
+    "pwm_mean":      0.0,
+
+    # Alarms
+    "alarm":         None,
+
+    # Auto-tune sub-dict (managed by AutoTuner)
     "autotune": {
-        "active":   False,
-        "status":   "IDLE",
-        "progress": 0,
-        "result":   None,
-        "log":      []
-    }
+        "active": False, "status": "idle",
+        "progress": 0, "elapsed": 0.0, "total": 60.0,
+        "peaks_found": 0, "result": None, "log": [],
+    },
 }
 
-pid  = PIDController(motor, state)
+pid   = PIDController(motor, state)
 tuner = AutoTuner(motor, state)
 
-# ─────────────────────────────────────────────
-# FastAPI app
-# ─────────────────────────────────────────────
-app = FastAPI(title="Industrial PID SCADA", version="2.0.0")
+# ─────────────────────────────────────────────────────────
+# FastAPI App
+# ─────────────────────────────────────────────────────────
+app = FastAPI(title="Industrial PID SCADA", version="3.0.0")
 
-# ── WebSocket connection manager ─────────────
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ─────────────────────────────────────────────────────────
+# WebSocket Connection Manager
+# ─────────────────────────────────────────────────────────
 class ConnectionManager:
     def __init__(self):
         self.active: list[WebSocket] = []
@@ -65,7 +102,8 @@ class ConnectionManager:
         self.active.append(ws)
 
     def disconnect(self, ws: WebSocket):
-        self.active.remove(ws)
+        if ws in self.active:
+            self.active.remove(ws)
 
     async def broadcast(self, data: dict):
         dead = []
@@ -75,83 +113,138 @@ class ConnectionManager:
             except Exception:
                 dead.append(ws)
         for ws in dead:
-            self.active.remove(ws)
+            self.disconnect(ws)
+
+    @property
+    def count(self):
+        return len(self.active)
+
 
 manager = ConnectionManager()
 
+# Give tuner a reference to broadcast + event loop
+tuner.broadcast_fn = manager.broadcast
 
+
+@app.on_event("startup")
+async def startup():
+    tuner.set_event_loop(asyncio.get_event_loop())
+    asyncio.create_task(_telemetry_loop())
+
+
+# ─────────────────────────────────────────────────────────
+# Background telemetry broadcast (20Hz)
+# ─────────────────────────────────────────────────────────
+async def _telemetry_loop():
+    while True:
+        if manager.count > 0:
+            msg = {
+                "type": "telemetry",
+                "data": {
+                    "rpm":        round(state["smoothed_rpm"], 2),
+                    "pwm":        round(state["pwm"], 2),
+                    "error":      round(state["error"], 2),
+                    "setpoint":   state["setpoint"],
+                    "phase":      state["phase"],
+                    "running":    state["running"],
+                    "kp":         state["kp"],
+                    "ki":         state["ki"],
+                    "kd":         state["kd"],
+                    "rise_time":  state.get("rise_time"),
+                    "overshoot":  state.get("overshoot"),
+                    "settle_time": state.get("settle_time"),
+                    "itae":       state.get("itae"),
+                    "pwm_mean":   state.get("pwm_mean"),
+                    "ts":         time.time(),
+                    "autotune":   state["autotune"],
+                }
+            }
+            await manager.broadcast(msg)
+
+            # Forward any pending alarm
+            if state.get("alarm"):
+                alarm_data = state["alarm"]
+                await manager.broadcast({
+                    "type": "alarm",
+                    "data": {
+                        "level":   alarm_data.get("level", "critical"),
+                        "message": alarm_data.get("message", "Unknown alarm"),
+                        "ts":      time.time(),
+                    }
+                })
+                state["alarm"] = None   # consume it
+
+        await asyncio.sleep(WS_TELEMETRY_INTERVAL)
+
+
+# ─────────────────────────────────────────────────────────
+# WebSocket Endpoint — bidirectional
+# ─────────────────────────────────────────────────────────
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     await manager.connect(ws)
     try:
         while True:
-            await ws.send_json(state)
-            await asyncio.sleep(0.05)   # 50ms push
+            raw = await ws.receive_json()
+            action = raw.get("action")
+            params = raw.get("params", {})
+
+            if action == "start":
+                state["running"]    = True
+                state["run_source"] = "manual"
+
+            elif action == "stop":
+                state["running"] = False
+                motor.stop()
+
+            elif action == "set_pid":
+                if "kp" in params:       state["kp"]       = float(params["kp"])
+                if "ki" in params:       state["ki"]       = float(params["ki"])
+                if "kd" in params:       state["kd"]       = float(params["kd"])
+                if "setpoint" in params: state["setpoint"] = float(params["setpoint"])
+
+            elif action == "start_autotune":
+                sp  = float(params.get("setpoint",  60.0))
+                amp = float(params.get("relay_amp", 20.0))
+                tuner.start(sp, amp)
+
+            elif action == "load_recipe":
+                rid    = int(params.get("id", 0))
+                recipe = logger.get_recipe_by_id(rid)
+                if recipe:
+                    state["kp"]       = recipe["kp"]
+                    state["ki"]       = recipe["ki"]
+                    state["kd"]       = recipe["kd"]
+                    state["run_source"] = "recipe"
+
+            else:
+                pass  # unknown action — ignore
+
     except WebSocketDisconnect:
+        manager.disconnect(ws)
+    except Exception as e:
+        print(f"WS error: {e}")
         manager.disconnect(ws)
 
 
-# ── REST Endpoints ───────────────────────────
-class UpdateParams(BaseModel):
-    target_rpm: Optional[float] = None
-    Kp: Optional[float] = None
-    Ki: Optional[float] = None
-    Kd: Optional[float] = None
-    running: Optional[bool] = None
+# ─────────────────────────────────────────────────────────
+# REST Endpoints
+# ─────────────────────────────────────────────────────────
+
+@app.get("/api/status")
+async def get_status():
+    return {
+        "uptime":            round(time.time() - _start_time, 1),
+        "connected_clients": manager.count,
+        "running":           state["running"],
+        "mock_mode":         not HARDWARE_AVAILABLE,
+        "version":           "3.0.0",
+    }
 
 
-@app.post("/api/update")
-async def update_params(params: UpdateParams):
-    if params.target_rpm is not None:
-        state["target_rpm"] = float(params.target_rpm)
-    if params.Kp is not None:
-        state["Kp"] = float(params.Kp)
-    if params.Ki is not None:
-        state["Ki"] = float(params.Ki)
-    if params.Kd is not None:
-        state["Kd"] = float(params.Kd)
-    if params.running is not None:
-        state["running"] = bool(params.running)
-    return {"status": "ok"}
-
-
-@app.get("/api/state")
-async def get_state():
-    return state
-
-
-class AutoTuneRequest(BaseModel):
-    setpoint_rpm: float = 40.0
-
-
-@app.post("/api/autotune/start")
-async def start_autotune(req: AutoTuneRequest):
-    if req.setpoint_rpm <= 5:
-        raise HTTPException(400, "Setpoint must be > 5 RPM for auto-tune")
-    state["running"] = True
-    result = tuner.start(req.setpoint_rpm)
-    return result
-
-
-@app.post("/api/autotune/apply")
-async def apply_autotune():
-    result = state["autotune"].get("result")
-    if not result:
-        raise HTTPException(400, "No auto-tune result available")
-    state["Kp"] = result["Kp"]
-    state["Ki"] = result["Ki"]
-    state["Kd"] = result["Kd"]
-    return {"status": "applied", "Kp": result["Kp"], "Ki": result["Ki"], "Kd": result["Kd"]}
-
-
-@app.get("/api/history")
-async def get_history(limit: int = 300):
-    return logger.get_history(limit)
-
-
-@app.get("/api/alarms")
-async def get_alarms(limit: int = 100):
-    return logger.get_alarms(limit)
+@app.get("/api/runs")
+async def get_runs(limit: int = 100, offset: int = 0):
+    return logger.get_runs(limit=limit, offset=offset)
 
 
 @app.get("/api/recipes")
@@ -159,16 +252,9 @@ async def get_recipes():
     return logger.get_recipes()
 
 
-class RecipeCreate(BaseModel):
-    name: str
-    kp: float
-    ki: float
-    kd: float
-
-
-@app.post("/api/recipes")
+@app.post("/api/recipes", status_code=201)
 async def save_recipe(recipe: RecipeCreate):
-    logger.save_recipe(recipe.name, recipe.kp, recipe.ki, recipe.kd)
+    logger.save_recipe(recipe.name, recipe.kp, recipe.ki, recipe.kd, recipe.notes or "")
     return {"status": "saved"}
 
 
@@ -178,24 +264,47 @@ async def delete_recipe(recipe_id: int):
     return {"status": "deleted"}
 
 
-# ── Serve React Frontend ─────────────────────
-FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+@app.get("/api/alarms")
+async def get_alarms(limit: int = 50):
+    return logger.get_alarms(limit=limit)
+
+
+@app.post("/api/alarms/{alarm_id}/ack")
+async def ack_alarm(alarm_id: int):
+    logger.ack_alarm(alarm_id)
+    return {"status": "acknowledged"}
+
+
+# ─────────────────────────────────────────────────────────
+# Serve React Frontend (built dist/)
+# ─────────────────────────────────────────────────────────
+FRONTEND_DIST = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+)
 
 if os.path.isdir(FRONTEND_DIST):
-    app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="assets")
+    app.mount(
+        "/assets",
+        StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")),
+        name="assets"
+    )
 
     @app.get("/")
-    async def serve_frontend():
+    async def serve_root():
         return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
 
     @app.get("/{full_path:path}")
     async def catch_all(full_path: str):
+        f = os.path.join(FRONTEND_DIST, full_path)
+        if os.path.isfile(f):
+            return FileResponse(f)
         return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
+
 else:
     @app.get("/")
     async def dev_notice():
         return {
-            "message": "Backend running. Build the React frontend with 'npm run build' first.",
-            "ws": "ws://localhost:8000/ws",
-            "api": "/docs"
+            "message": "Backend running. Build the React frontend first: cd frontend && npm run build",
+            "ws":      "ws://localhost:8000/ws",
+            "docs":    "/docs",
         }

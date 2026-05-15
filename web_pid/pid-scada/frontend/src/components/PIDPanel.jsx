@@ -1,51 +1,47 @@
 /**
- * PIDPanel.jsx
- * Kp/Ki/Kd + Target RPM sliders with live send + recipe save/load.
+ * PIDPanel.jsx - FIXED
+ * Key fix: sliders use LOCAL state only. WebSocket state does NOT overwrite
+ * slider values while the user is interacting. Syncs only on first load
+ * and when auto-tuner applies new values (detected by a version counter).
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 export default function PIDPanel({ motorState, sendUpdate }) {
-  const [local, setLocal] = useState({
-    target_rpm: motorState.target_rpm,
-    Kp: motorState.Kp,
-    Ki: motorState.Ki,
-    Kd: motorState.Kd,
-  })
-  const [recipes, setRecipes]         = useState([])
-  const [recipeName, setRecipeName]   = useState('')
-  const [saving, setSaving]           = useState(false)
+  const [kp, setKp] = useState(motorState.Kp)
+  const [ki, setKi] = useState(motorState.Ki)
+  const [kd, setKd] = useState(motorState.Kd)
+  const [recipes, setRecipes]       = useState([])
+  const [recipeName, setRecipeName] = useState('')
+  const [saving, setSaving]         = useState(false)
 
-  // Sync if auto-tuner applies new values
+  // Track last auto-tune result version so we only sync when AT applies new values
+  const lastAtResult = useRef(null)
+
   useEffect(() => {
-    setLocal(l => ({
-      ...l,
-      Kp: motorState.Kp,
-      Ki: motorState.Ki,
-      Kd: motorState.Kd,
-    }))
-  }, [motorState.Kp, motorState.Ki, motorState.Kd])
+    const result = motorState.autotune?.result
+    if (result && result !== lastAtResult.current) {
+      lastAtResult.current = result
+      setKp(result.Kp)
+      setKi(result.Ki)
+      setKd(result.Kd)
+    }
+  }, [motorState.autotune?.result])
 
   // Load recipes on mount
   useEffect(() => { fetchRecipes() }, [])
 
   const fetchRecipes = async () => {
-    const res  = await fetch('/api/recipes')
-    const data = await res.json()
-    setRecipes(data)
+    try {
+      const res  = await fetch('/api/recipes')
+      const data = await res.json()
+      setRecipes(data)
+    } catch (_) {}
   }
 
-  const handleSlider = (key, val) => {
-    const v = parseFloat(val)
-    setLocal(l => ({ ...l, [key]: v }))
-    sendUpdate({ [key]: v })
-  }
-
-  const sliders = [
-    { key: 'target_rpm', label: 'Target RPM',       min: 0,   max: 60,  step: 1,    unit: 'RPM' },
-    { key: 'Kp',         label: 'Proportional (Kp)', min: 0,   max: 10,  step: 0.05, unit: '' },
-    { key: 'Ki',         label: 'Integral (Ki)',      min: 0,   max: 5,   step: 0.05, unit: '' },
-    { key: 'Kd',         label: 'Derivative (Kd)',    min: 0,   max: 1,   step: 0.01, unit: '' },
-  ]
+  // Single handler: update local state + send to backend immediately
+  const handleKp = (v) => { setKp(+v); sendUpdate({ Kp: +v }) }
+  const handleKi = (v) => { setKi(+v); sendUpdate({ Ki: +v }) }
+  const handleKd = (v) => { setKd(+v); sendUpdate({ Kd: +v }) }
 
   const saveRecipe = async () => {
     if (!recipeName.trim()) return
@@ -53,7 +49,7 @@ export default function PIDPanel({ motorState, sendUpdate }) {
     await fetch('/api/recipes', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: recipeName, kp: local.Kp, ki: local.Ki, kd: local.Kd }),
+      body: JSON.stringify({ name: recipeName, kp, ki, kd }),
     })
     setRecipeName('')
     await fetchRecipes()
@@ -61,9 +57,8 @@ export default function PIDPanel({ motorState, sendUpdate }) {
   }
 
   const loadRecipe = (r) => {
-    const patch = { Kp: r.kp, Ki: r.ki, Kd: r.kd }
-    setLocal(l => ({ ...l, ...patch }))
-    sendUpdate(patch)
+    setKp(r.kp); setKi(r.ki); setKd(r.kd)
+    sendUpdate({ Kp: r.kp, Ki: r.ki, Kd: r.kd })
   }
 
   const deleteRecipe = async (id) => {
@@ -81,32 +76,49 @@ export default function PIDPanel({ motorState, sendUpdate }) {
           <span className="tag">LIVE</span>
         </div>
         <div className="panel-body">
-          {sliders.map(s => (
-            <div key={s.key} className="slider-row">
-              <span className="slider-label">{s.label}</span>
-              <input
-                type="range"
-                min={s.min} max={s.max} step={s.step}
-                value={local[s.key]}
-                onChange={e => handleSlider(s.key, e.target.value)}
-              />
-              <span className="slider-display">
-                {Number(local[s.key]).toFixed(s.step < 0.1 ? 2 : s.step === 1 ? 0 : 2)}
-                {s.unit && <span style={{ fontSize: 10, opacity: 0.6, marginLeft: 2 }}>{s.unit}</span>}
-              </span>
-            </div>
-          ))}
 
-          {/* Current gains summary */}
+          {/* Kp */}
+          <div className="slider-row">
+            <span className="slider-label">Proportional (Kp)</span>
+            <input type="range" min={0} max={10} step={0.05}
+              value={kp} onChange={e => handleKp(e.target.value)} />
+            <span className="slider-display">{Number(kp).toFixed(2)}</span>
+          </div>
+
+          {/* Ki */}
+          <div className="slider-row">
+            <span className="slider-label">Integral (Ki)</span>
+            <input type="range" min={0} max={5} step={0.05}
+              value={ki} onChange={e => handleKi(e.target.value)} />
+            <span className="slider-display">{Number(ki).toFixed(2)}</span>
+          </div>
+
+          {/* Kd */}
+          <div className="slider-row">
+            <span className="slider-label">Derivative (Kd)</span>
+            <input type="range" min={0} max={1} step={0.01}
+              value={kd} onChange={e => handleKd(e.target.value)} />
+            <span className="slider-display">{Number(kd).toFixed(2)}</span>
+          </div>
+
+          {/* Live summary */}
           <div style={{
-            marginTop: 12, padding: 10, background: '#09101a',
+            marginTop: 14, padding: '12px 14px', background: '#09101a',
             borderRadius: 4, border: '1px solid #1e2535',
-            fontFamily: 'Share Tech Mono', fontSize: 12, color: '#475569',
-            lineHeight: 1.8
+            fontFamily: 'Share Tech Mono', fontSize: 13, lineHeight: 2
           }}>
-            <div>Kp = <span style={{ color: '#f59e0b' }}>{local.Kp.toFixed(3)}</span></div>
-            <div>Ki = <span style={{ color: '#f59e0b' }}>{local.Ki.toFixed(3)}</span></div>
-            <div>Kd = <span style={{ color: '#f59e0b' }}>{local.Kd.toFixed(3)}</span></div>
+            <div>Kp = <span style={{ color: '#f59e0b' }}>{Number(kp).toFixed(3)}</span></div>
+            <div>Ki = <span style={{ color: '#f59e0b' }}>{Number(ki).toFixed(3)}</span></div>
+            <div>Kd = <span style={{ color: '#f59e0b' }}>{Number(kd).toFixed(3)}</span></div>
+          </div>
+
+          {/* Live actual from backend for comparison */}
+          <div style={{
+            marginTop: 8, padding: '8px 14px', background: '#09101a',
+            borderRadius: 4, border: '1px solid #1e2535',
+            fontFamily: 'Share Tech Mono', fontSize: 11, color: '#334155'
+          }}>
+            Backend active → Kp={motorState.Kp?.toFixed(3)} Ki={motorState.Ki?.toFixed(3)} Kd={motorState.Kd?.toFixed(3)}
           </div>
         </div>
       </div>
@@ -120,7 +132,6 @@ export default function PIDPanel({ motorState, sendUpdate }) {
           </span>
         </div>
         <div className="panel-body">
-          {/* Save current as recipe */}
           <div className="flex gap-8 mb-12">
             <input
               type="text"
@@ -138,10 +149,7 @@ export default function PIDPanel({ motorState, sendUpdate }) {
               SAVE
             </button>
           </div>
-
           <div className="section-sep" />
-
-          {/* Recipe list */}
           <div className="recipe-list">
             {recipes.length === 0 && (
               <div style={{ color: '#334155', fontFamily: 'Share Tech Mono', fontSize: 12, textAlign: 'center', padding: 16 }}>

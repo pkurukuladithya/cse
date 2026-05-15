@@ -1,3 +1,5 @@
-fastapi
-uvicorn[standard]
-pigpio
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+RPi.GPIO==0.7.1
+python-dotenv==1.0.1
+pydantic>=2.0
