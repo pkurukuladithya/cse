@@ -37,6 +37,7 @@ class MotorDriver:
         self._setup_gpio()
 
     def _setup_gpio(self):
+        GPIO.setwarnings(False)
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(PWMA_PIN, GPIO.OUT)
         GPIO.setup(AIN1_PIN, GPIO.OUT)
@@ -51,8 +52,11 @@ class MotorDriver:
         self.pwm = GPIO.PWM(PWMA_PIN, 1000)
         self.pwm.start(0)
 
-        GPIO.add_event_detect(ENC_A_PIN, GPIO.BOTH, callback=self._encoder_callback)
-        GPIO.add_event_detect(ENC_B_PIN, GPIO.BOTH, callback=self._encoder_callback)
+        try:
+            GPIO.add_event_detect(ENC_A_PIN, GPIO.BOTH, callback=self._encoder_callback)
+            GPIO.add_event_detect(ENC_B_PIN, GPIO.BOTH, callback=self._encoder_callback)
+        except RuntimeError as exc:
+            raise RuntimeError(f"GPIO edge detection setup failed: {exc}") from exc
         self._initialized = True
 
     def _encoder_callback(self, channel: int):
