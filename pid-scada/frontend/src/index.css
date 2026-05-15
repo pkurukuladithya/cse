@@ -1,0 +1,127 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-base: #070c14;
+  --bg-panel: #0c1420;
+  --bg-raised: #111d2e;
+  --bg-surface: #16243a;
+  --accent: #00c8e8;
+  --accent-dim: #0090a8;
+  --accent-glow: rgba(0, 200, 232, 0.12);
+  --green: #00e5a0;
+  --amber: #f5a623;
+  --red: #f03e3e;
+  --purple: #9b6dff;
+  --text-primary: #d4e8f0;
+  --text-secondary: #607a90;
+  --text-muted: #3a5060;
+  --border: rgba(0, 200, 232, 0.12);
+  font-family: 'Inter', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(circle at top, rgba(0, 200, 232, 0.08), transparent 28%),
+    linear-gradient(180deg, #07111d 0%, #070c14 100%);
+  color: var(--text-primary);
+  font-family: 'Inter', sans-serif;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.02) 2px, transparent 2px, transparent 4px);
+  pointer-events: none;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.app-shell {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 20px 24px 32px;
+}
+
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  padding: 22px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.14);
+  position: relative;
+  overflow: hidden;
+  clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 0 100%);
+}
+
+.panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), transparent);
+}
+
+.tab-content {
+  margin-top: 18px;
+}
+
+.app-footer {
+  margin-top: 24px;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.text-mono {
+  font-family: 'Share Tech Mono', monospace;
+}
+
+.btn-outline {
+  border: 1px solid currentColor;
+  background: transparent;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  padding: 10px 14px;
+  border-radius: 12px;
+}
+
+.btn-green {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.btn-red {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.input-range {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.card-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
