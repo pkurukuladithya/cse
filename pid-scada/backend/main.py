@@ -39,7 +39,12 @@ def _safe_int(value: Any, default: int = 0) -> int:
 class SCADAServer:
     def __init__(self):
         initialize_database()
-        self.driver = MotorDriver()
+        try:
+            self.driver = MotorDriver()
+            print(f"✓ Motor driver initialized ({'MOCK' if self.driver.use_mock else 'REAL GPIO'})")
+        except Exception as exc:
+            print(f"✗ Motor driver initialization failed: {exc}")
+            raise
         self.pid = PIDController(DEFAULT_KP, DEFAULT_KI, DEFAULT_KD, DEFAULT_SETPOINT, DEFAULT_SAMPLE_TIME)
         self.tuner = AutoTuner(self.read_rpm, self.driver.set_pwm)
         self.clients: Set[WebSocket] = set()
